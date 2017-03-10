@@ -4,3 +4,8 @@ A pure lua postgres driver for use in [[https://github.com/cloudwu/skynet][skyne
 Modified from [[https://github.com/leafo/pgmoon][leafo/pgmoon]]
 
 * Install
+#+begin_src shell
+	cp -r skynet_pgsql/lualib/pgsql your_skynet_root/lualib/
+#+end_src
+* Usage
+TODO
