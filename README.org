@@ -1,5 +1,5 @@
 * skynet_pgsql
-A pure lua postgres driver for use in skynet.
+A pure lua postgres driver for use in [[https://github.com/cloudwu/skynet][skynet]].
 
 Modified from [[https://github.com/leafo/pgmoon][leafo/pgmoon]]
 
