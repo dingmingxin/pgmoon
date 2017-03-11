@@ -200,7 +200,7 @@ do
 		value = V("invalid_char") + V("string"),
 		string = P('"') * Cs((P([[\\]]) / [[\]] + P([[\"]]) / [["]] + (P(1) - P('"'))) ^ 0) * P('"'),
 		null = C('NULL'),
-		invalid_char = S(" \t\r\n") / decode_error_whitespace
+		invalid_char = S(" \t\r\n") / decode_error_whitespace,
 		delim = P(", ")
 	}
 
