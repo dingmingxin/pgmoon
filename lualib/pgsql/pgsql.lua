@@ -415,6 +415,10 @@ compose_message[MSG_TYPE.query] = function(q)
 	return {q, NULL}
 end
 
+function command:disconnect()
+	self[1]:close()
+end
+
 setmetatable(command, { __index = function(t, k)
 	local cmd = k
 	local f = function(self, v, ...)
