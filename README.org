@@ -5,7 +5,7 @@ Modified from [[https://github.com/leafo/pgmoon][leafo/pgmoon]]
 
 * Install
 #+begin_src shell
-	cp -r skynet_pgsql/lualib/pgsql your_skynet_root/lualib/
+  cp -r skynet_pgsql/lualib/pgsql your_skynet_root/lualib/
 #+end_src
 * Simple Example 
 #+begin_src lua 
