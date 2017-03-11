@@ -7,8 +7,22 @@ Modified from [[https://github.com/leafo/pgmoon][leafo/pgmoon]]
 #+begin_src shell
 	cp -r skynet_pgsql/lualib/pgsql your_skynet_root/lualib/
 #+end_src
-* Usage
-TODO
+* Simple Example 
+#+begin_src lua 
+  local conf = {
+	  host = "127.0.0.1",
+	  port = 5432,
+	  user = "dbadmin",
+	  password = "dbadmin",
+	  database = "exampledb",
+  }
+  local db = pgsql.connect(conf)
+  local sql = "select * from weather;"
+  local result = db:query(sql)
+#+end_src
+* Desc
+** Authentication Types
+currently supports password based authentication methods: TRUST , MD5, PASSWORD
 * LICENSE
 
 Copyright (C) 2016 by Leaf Corcoran
