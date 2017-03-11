@@ -1,8 +1,12 @@
 local skynet = require "skynet"
 local socket = require "socket"
 local socketchannel = require "socketchannel"
+local cjson = require "cjson"
+local lpeg = require "lpeg"
 
-local sutil = require "utils.util"
+cjson.encode_sparse_array(true)
+
+local util = require "utils.util"
 local table = table
 local tinsert = table.insert
 local tconcat = table.concat
@@ -11,14 +15,16 @@ local assert = assert
 
 --TODO 缓存table的表头，避免每次都要解析
 local NULL = "\0"
+
 local pg = {}
 local command = {}
+
 local meta = {
 	__index = command,
 	-- DO NOT close channel in __gc
 }
 
-local util = {}
+local pgutil = require "pgsql.util"
 
 local AUTH_TYPE = {
 	NO_AUTH = 0,
@@ -52,81 +58,13 @@ local PG_TYPES = {
 	[199] = "array_json",
 	[3807] = "array_json"
 }
-local type_deserializers = {
-	json = function(self, val, name)
-		local decode_json
-		decode_json = require("pgmoon.json").decode_json
-		return decode_json(val)
-	end,
-	bytea = function(self, val, name)
-		return self:decode_bytea(val)
-	end,
-	array_boolean = function(self, val, name)
-		local decode_array
-		decode_array = require("pgmoon.arrays").decode_array
-		return decode_array(val, tobool)
-	end,
-	array_number = function(self, val, name)
-		local decode_array
-		decode_array = require("pgmoon.arrays").decode_array
-		return decode_array(val, tonumber)
-	end,
-	array_string = function(self, val, name)
-		local decode_array
-		decode_array = require("pgmoon.arrays").decode_array
-		return decode_array(val)
-	end,
-	array_json = function(self, val, name)
-		local decode_array
-		decode_array = require("pgmoon.arrays").decode_array
-		local decode_json
-		decode_json = require("pgmoon.json").decode_json
-		return decode_array(val, decode_json)
-	end,
-	hstore = function(self, val, name)
-		local decode_hstore
-		decode_hstore = require("pgmoon.hstore").decode_hstore
-		return decode_hstore(val)
-	end
-}
+
+local tobool = function(str)
+  return str == "t"
+end
 
 local pg_auth_cmd = {}
 local read_response = nil
-
-util.cal_len = function(thing, t)
-	if t == nil then
-		t = type(thing)
-	end
-	if "string" == t then
-		return #thing
-	elseif "table" == t then
-		local l = 0
-		for i = 1, #thing do
-			local inner = thing[i]
-			local inner_t = type(inner)
-			if inner_t == "string" then
-				l = l + #inner
-			else
-				l = l + util.cal_len(inner, inner_t)
-			end
-		end
-		return l
-	else
-		return error("don't know how to calculate length of " .. tostring(t))
-	end
-end
-
-function util.flip(t)
-	local keys = {}
-	for k,v in pairs(t) do
-		tinsert(keys, k)
-	end
-	for i=1, #keys do
-		local k = keys[i]
-		t[t[k]] = k
-	end
-	return t
-end
 
 local MSG_TYPE = {
 	status = "S",
@@ -152,15 +90,26 @@ local ERROR_TYPES = {
 	table = "t",
 	constraint = "n"
 }
-MSG_TYPE = util.flip(MSG_TYPE)
-ERROR_TYPES = util.flip(ERROR_TYPES)
+
+MSG_TYPE = pgutil.flip(MSG_TYPE)
+ERROR_TYPES = pgutil.flip(ERROR_TYPES)
+
+local function send_message(so, msg_type, data, len)
+	if len == nil then
+		len = pgutil.cal_len(data)
+	end
+	len = len + 4
+	local req_data = {msg_type, pgutil.encode_int(len), data}
+	local req_msg = pgutil.flatten(req_data)
+	return so:request(req_msg, read_response)
+end
 
 pg_auth_cmd[AUTH_TYPE.NO_AUTH] = function(fd, data)
 	return true
 end
 pg_auth_cmd[AUTH_TYPE.PLAIN_TEXT] = function(so, user, password)
 	local data = {password, NULL}
-	util.send_message(so, MSG_TYPE.password, data)
+	send_message(so, MSG_TYPE.password, data)
 	return true
 end
 
@@ -176,7 +125,6 @@ function pg_auth_cmd:send_auth_info(so, db_conf)
 	local auth_type = self.auth_type
 	local f = self[auth_type]
 	assert(f, string.format("auth_type func not exist %s", self.auth_type))
-	print(auth_type, "send_auth_info")
 	f(so, db_conf.user, db_conf.password)
 end
 
@@ -195,57 +143,45 @@ end
 
 setmetatable(pg_auth_cmd, pg_auth_cmd)
 
-function util.encode_int(n, bytes)
-	if bytes == nil then
-		bytes = 4
-	end
-	if 4 == bytes then
-		local a = n & 0xff
-		local b = (n >> 8) & 0xff
-		local c = (n >> 16) & 0xff
-		local d = (n >> 24) & 0xff
-		return string.char(d, c, b, a)
-	else
-		return error("don't know how to encode " .. tostring(bytes) .. " byte(s)")
-	end
+local decode_json = function(json)
+	return cjson.decode(json)
 end
 
-function util.decode_int(str, bytes)
-	if bytes == nil then
-		bytes = #str
+local type_deserializers = {
+	json = function(val)
+		return decode_json(val)
+	end,
+	bytea = function(val)
+		return pgutil.decode_bytea(val)
+	end,
+	array_boolean = function(val)
+		return pgutil.decode_array(val, tobool)
+	end,
+	array_number = function(val)
+		return pgutil.decode_array(val, tonumber)
+	end,
+	array_string = function(val)
+		return pgutil.decode_array(val)
+	end,
+	array_json = function(val)
+		return pgutil.decode_array(val, decode_json)
+	end,
+	hstore = function(val)
+		return pgutil.decode_hstore(val)
 	end
-	if 4 == bytes then
-		local d, c, b, a = str:byte(1, 4)
-		return a + (b << 8) + (c << 16) + (d << 24)
-	elseif 2 == bytes then
-		local b, a = str:byte(1, 2)
-		return a + (b << 8)
-	else
-		return error("don't know how to decode " .. tostring(bytes) .. " byte(s)")
-	end
-end
-
-function util.send_message(so, msg_type, data, len)
-	if len == nil then
-		len = util.cal_len(data)
-	end
-	len = len + 4
-	local req_data = {msg_type, util.encode_int(len), data}
-	local req_msg = util.flatten(req_data)
-	return so:request(req_msg, read_response)
-end
+}
 
 local function parse_row_desc(row_desc)
-	local num_fields = util.decode_int(row_desc:sub(1, 2))
+	local num_fields = pgutil.decode_int(row_desc:sub(1, 2))
 	local offset = 3
 	local fields = {}
 
 	for i = 1, num_fields do
 		local name = row_desc:match("[^%z]+", offset)
 		offset = offset + #name + 1
-		local data_type = util.decode_int(row_desc:sub(offset + 6, offset + 6 + 3))
+		local data_type = pgutil.decode_int(row_desc:sub(offset + 6, offset + 6 + 3))
 		data_type = PG_TYPES[data_type] or "string"
-		local format = util.decode_int(row_desc:sub(offset + 16, offset + 16 + 1))
+		local format = pgutil.decode_int(row_desc:sub(offset + 16, offset + 16 + 1))
 		assert(0 == format, "don't know how to handle format")
 		offset = offset + 18
 		local info = {
@@ -258,8 +194,8 @@ local function parse_row_desc(row_desc)
 	return fields
 end
 local function parse_row_data(data_row, fields)
-	local num_fields = util.decode_int(data_row:sub(1, 2))
-	print(num_fields, "num_fields")
+	local num_fields = pgutil.decode_int(data_row:sub(1, 2))
+
 	local out = {}
 	local offset = 3
 	for i = 1, num_fields do
@@ -273,13 +209,13 @@ local function parse_row_data(data_row, fields)
 			local field_name, field_type
 			field_name, field_type = field[1], field[2]
 			--print(field_name, field_type, "field")
-			local len = util.decode_int(data_row:sub(offset, offset + 3))
+			local len = pgutil.decode_int(data_row:sub(offset, offset + 3))
 			offset = offset + 4
 			if len < 0 then
 				--TODO null 处理
-				if self.convert_null then
-					out[field_name] = NULL
-				end
+				--if self.convert_null then
+				--    out[field_name] = NULL
+				--end
 				to_continue = true
 				break
 			end
@@ -292,11 +228,9 @@ local function parse_row_data(data_row, fields)
 			elseif "string" == field_type then
 				value = value
 			else
-				do
-					local fn = type_deserializers[field_type]
-					if fn then
-						value = fn(value, field_type)
-					end
+				local fn = type_deserializers[field_type]
+				if fn then
+					value = fn(value, field_type)
 				end
 			end
 			out[field_name] = value
@@ -313,8 +247,7 @@ end
 local pg_command = {}
 
 pg_command[MSG_TYPE.auth] = function(self, data)
-	local auth_type = util.decode_int(data, 4)
-	print(auth_type, "auth_type")
+	local auth_type = pgutil.decode_int(data, 4)
 	if auth_type ~= AUTH_TYPE.NO_AUTH then
 		pg_auth_cmd:set_auth_type(auth_type)
 	end
@@ -322,7 +255,7 @@ pg_command[MSG_TYPE.auth] = function(self, data)
 end
 
 pg_command[MSG_TYPE.status] = function(self, data)
-	print("MSG_TYPE.status", data)
+	--print("MSG_TYPE.status", data)
 	return true
 end
 
@@ -331,12 +264,13 @@ pg_command[MSG_TYPE.backend_key] = function(self, data)
 end
 
 pg_command[MSG_TYPE.ready_for_query] = function(self, data)
-	print("MSG_TYPE.ready_for_query")
+	--print("MSG_TYPE.ready_for_query")
 	pg_auth_cmd:set_ready_for_query()
 	return true
 end
 
 pg_command[MSG_TYPE.query] = function(self, data)
+	print("MSG_TYPE.query")
 end
 
 pg_command[MSG_TYPE.notice] = function(self, data)
@@ -351,24 +285,31 @@ end
 pg_command[MSG_TYPE.row_description] = function(self, data)
 	print("MSG_TYPE.row_description", data)
 	if data == nil then
+		self.row_data = {}
 		return false
 	else
 		local fields = parse_row_desc(data)
-		sutil.dump(fields, "fields")
-		self.row_desc = data
+		self.row_fields = fields
 		self.row_data = {}
 		return true, data
 	end
 end
 
 pg_command[MSG_TYPE.data_row] = function(self, data)
-	tinsert(self.row_data, data)
 	print("MSG_TYPE.data_row")
+	local parsed_data = parse_row_data(data, self.row_fields)
+	tinsert(self.row_data, parsed_data)
 	return true
 end
 
-pg_command[MSG_TYPE.command_complete] = function(self, data)
-	print("MSG_TYPE.command_complete")
+pg_command[MSG_TYPE.command_complete] = function(self, msg)
+
+	local command = msg:match("^%w+")
+	local affected_rows = tonumber(msg:match("(%d+)"))
+	print("MSG_TYPE.command_complete", msg, command, affected_rows)
+	if affected_rows == 0 then
+		self.row_data = nil
+	end
 	self.command_complete = true
 	return true
 end
@@ -384,11 +325,9 @@ pg_command[MSG_TYPE.error] = function(self, err_msg)
 			break
 		end
 		offset = offset + (2 + #str)
-		do
-			local field = ERROR_TYPES[t]
-			if field then
-				error_data[field] = str
-			end
+		local field = ERROR_TYPES[t]
+		if field then
+			error_data[field] = str
 		end
 		if ERROR_TYPES.severity == t then
 			severity = str
@@ -416,7 +355,7 @@ function pg_command:read_response()
 		so:response(read_response)
 	end
 	self.command_complete = false
-	return self.row_desc, self.row_data
+	return self.row_data
 end
 
 setmetatable(pg_command, pg_command)
@@ -424,40 +363,19 @@ setmetatable(pg_command, pg_command)
 read_response = function(fd)
 	local t = fd:read(1)
 	local len = fd:read(4)
-	len = util.decode_int(len)
+	len = pgutil.decode_int(len)
 	len = len - 4
 	local msg = fd:read(len)
-	print(t)
 	local f = pg_command[t]
 	assert(f, string.format("pg response func handle not exist: %s", t))
 	return f(pg_command, msg)
 end
 
-function util.__flatten(t, buffer)
-	local ttype = type(t)
-	if "string" == ttype then
-		buffer[#buffer + 1] = t
-	elseif "table" == ttype then
-		for i = 1, #t do
-			local thing = t[i]
-			util.__flatten(thing, buffer)
-		end
-	end
-end
-
-function util.flatten(t)
-	local buffer = { }
-	util.__flatten(t, buffer)
-	return tconcat(buffer)
-end
-
---util fuctions
-
 
 local function pg_login(conf)
 	return function(so)
 		local data = {
-			util.encode_int(196608),
+			pgutil.encode_int(196608),
 			"user",
 			NULL,
 			conf.user,
@@ -472,8 +390,7 @@ local function pg_login(conf)
 			NULL,
 			NULL
 		}
-		print(sutil.dump(so))
-		local req_msg = util.flatten({util.encode_int(util.cal_len(data)+4), data})
+		local req_msg = pgutil.flatten({pgutil.encode_int(pgutil.cal_len(data)+4), data})
 		pg_command.so = so
 		so:request(req_msg, read_response)
 		pg_auth_cmd:send_auth_info(so, conf)
@@ -504,12 +421,14 @@ setmetatable(command, { __index = function(t, k)
 		local msg_type = MSG_TYPE[cmd]
 		local compose_func = compose_message[msg_type]
 		local data = compose_func(v, ...)
-		util.send_message(self[1], msg_type, data)
+		local msg = send_message(self[1], msg_type, data)
 		return pg_command:read_response()
 	end
 	t[k] = f
 	return f
 end})
 
+pg.escape_identifier = util.escape_identifier
+pg.escape_literal = util.escape_literal
 
 return pg
