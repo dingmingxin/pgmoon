@@ -208,7 +208,6 @@ local function parse_row_data(data_row, fields)
 			end
 			local field_name, field_type
 			field_name, field_type = field[1], field[2]
-			--print(field_name, field_type, "field")
 			local len = pgutil.decode_int(data_row:sub(offset, offset + 3))
 			offset = offset + 4
 			if len < 0 then
@@ -255,7 +254,6 @@ pg_command[MSG_TYPE.auth] = function(self, data)
 end
 
 pg_command[MSG_TYPE.status] = function(self, data)
-	--print("MSG_TYPE.status", data)
 	return true
 end
 
@@ -264,13 +262,11 @@ pg_command[MSG_TYPE.backend_key] = function(self, data)
 end
 
 pg_command[MSG_TYPE.ready_for_query] = function(self, data)
-	--print("MSG_TYPE.ready_for_query")
 	pg_auth_cmd:set_ready_for_query()
 	return true
 end
 
 pg_command[MSG_TYPE.query] = function(self, data)
-	print("MSG_TYPE.query")
 end
 
 pg_command[MSG_TYPE.notice] = function(self, data)
@@ -283,7 +279,6 @@ pg_command[MSG_TYPE.password] = function(self, data)
 end
 
 pg_command[MSG_TYPE.row_description] = function(self, data)
-	print("MSG_TYPE.row_description", data)
 	if data == nil then
 		self.row_data = {}
 		return false
@@ -296,7 +291,6 @@ pg_command[MSG_TYPE.row_description] = function(self, data)
 end
 
 pg_command[MSG_TYPE.data_row] = function(self, data)
-	print("MSG_TYPE.data_row")
 	local parsed_data = parse_row_data(data, self.row_fields)
 	tinsert(self.row_data, parsed_data)
 	return true
@@ -306,7 +300,6 @@ pg_command[MSG_TYPE.command_complete] = function(self, msg)
 
 	local command = msg:match("^%w+")
 	local affected_rows = tonumber(msg:match("(%d+)"))
-	print("MSG_TYPE.command_complete", msg, command, affected_rows)
 	if affected_rows == 0 then
 		self.row_data = nil
 	end
