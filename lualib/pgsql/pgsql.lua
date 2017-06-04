@@ -275,8 +275,6 @@ end
 pg_command[MSG_TYPE.notification] = function(self, data)
 end
 
-pg_command[MSG_TYPE.password] = function(self, data)
-end
 
 pg_command[MSG_TYPE.row_description] = function(self, data)
 	if data == nil then
@@ -403,27 +401,32 @@ function pg.connect(db_conf)
 	return setmetatable( { channel }, meta )
 end
 
-local compose_message = {}
-compose_message[MSG_TYPE.query] = function(q)
-	return {q, NULL}
+local compose_message = function(args)
+	if args ~= nil then
+		tinsert(args, NULL)
+	end
+	return args
 end
 
 function command:disconnect()
 	self[1]:close()
 end
 
-setmetatable(command, { __index = function(t, k)
-	local cmd = k
-	local f = function(self, v, ...)
-		local msg_type = MSG_TYPE[cmd]
-		local compose_func = compose_message[msg_type]
-		local data = compose_func(v, ...)
-		local msg = send_message(self[1], msg_type, data)
-		return pg_command:read_response()
+local command_meta = {
+	__index = function(t, k)
+		local cmd = k
+		local f = function(self, v, ...)
+			local msg_type = MSG_TYPE[cmd]
+			local data = compose_message({v})
+			local msg = send_message(self[1], msg_type, data)
+			return pg_command:read_response()
+		end
+		t[k] = f
+		return f
 	end
-	t[k] = f
-	return f
-end})
+}
+
+setmetatable(command, command_meta)
 
 pg.escape_identifier = util.escape_identifier
 pg.escape_literal = util.escape_literal
