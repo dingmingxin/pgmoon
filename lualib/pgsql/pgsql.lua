@@ -1,12 +1,12 @@
 local skynet = require "skynet"
-local socket = require "socket"
-local socketchannel = require "socketchannel"
+local socket = require "skynet.socket"
+local socketchannel = require "skynet.socketchannel"
 local cjson = require "cjson"
 local lpeg = require "lpeg"
 
 cjson.encode_sparse_array(true)
 
-local util = require "utils.util"
+local util = require "pgsql.util"
 local table = table
 local tinsert = table.insert
 local tconcat = table.concat
@@ -125,6 +125,7 @@ function pg_auth_cmd:send_auth_info(so, db_conf)
 	local auth_type = db_conf.auth_type
 	local f = self[auth_type]
 	assert(f, string.format("auth_type func not exist %s", self.auth_type))
+
 	f(so, db_conf.user, db_conf.password)
 end
 
@@ -193,9 +194,9 @@ local function parse_row_desc(row_desc)
 
 	return fields
 end
+
 local function parse_row_data(data_row, fields)
 	local num_fields = pgutil.decode_int(data_row:sub(1, 2))
-
 	local out = {}
 	local offset = 3
 	for i = 1, num_fields do
@@ -295,11 +296,12 @@ pg_command[MSG_TYPE.data_row] = function(self, data)
 end
 
 pg_command[MSG_TYPE.command_complete] = function(self, msg)
-
 	local command = msg:match("^%w+")
-	local affected_rows = tonumber(msg:match("(%d+)"))
+	local oid, affected_rows = msg:match("(%d)%s+(%d)")
 	if affected_rows == 0 then
 		self.row_data = nil
+	else
+		self.row_data.affected_rows = affected_rows
 	end
 	self.command_complete = true
 	return true
