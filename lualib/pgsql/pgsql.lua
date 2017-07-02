@@ -122,7 +122,7 @@ function pg_auth_cmd:set_auth_type(auth_type)
 end
 
 function pg_auth_cmd:send_auth_info(so, db_conf)
-	local auth_type = self.auth_type
+	local auth_type = db_conf.auth_type
 	local f = self[auth_type]
 	assert(f, string.format("auth_type func not exist %s", self.auth_type))
 	f(so, db_conf.user, db_conf.password)
@@ -250,7 +250,7 @@ pg_command[MSG_TYPE.auth] = function(self, data)
 	if auth_type ~= AUTH_TYPE.NO_AUTH then
 		pg_auth_cmd:set_auth_type(auth_type)
 	end
-	return true 
+	return true
 end
 
 pg_command[MSG_TYPE.status] = function(self, data)
